@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: IP & Secret Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify proprietary copyright and absence of OSS licenses
+        run: |
+          test -s COPYRIGHT.md
+          bad_licenses="$(find . \( -name .git -o -name node_modules -o -name target -o -name .next -o -name .terraform \) -prune -o -type f \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'COPYING' -o -iname 'COPYING.*' \) -print)"
+          if [ -n "$bad_licenses" ]; then
+            echo "Forbidden OSS license file(s) found:"
+            echo "$bad_licenses"
+            exit 1
+          fi
+          cargo_licenses="$(find . \( -name .git -o -name node_modules -o -name target -o -name .next -o -name .terraform \) -prune -o -name 'Cargo.toml' -type f -exec grep -HnE '^[[:space:]]*(license|license-file)[[:space:]]*=' {} + || true)"
+          if [ -n "$cargo_licenses" ]; then
+            echo "Forbidden license metadata in Cargo.toml:"
+            echo "$cargo_licenses"
+            exit 1
+          fi
+          pkg_licenses="$(find . \( -name .git -o -name node_modules -o -name target -o -name .next -o -name .terraform \) -prune -o -name 'package.json' -type f -exec grep -HnE '"license"[[:space:]]*:' {} + || true)"
+          if [ -n "$pkg_licenses" ]; then
+            echo "Forbidden license field in package.json:"
+            echo "$pkg_licenses"
+            exit 1
+          fi
+
+      - name: Scan repository for hardcoded secrets
+        run: |
+          secret_hits="$(grep -rnE \
+            --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=target --exclude-dir=.next --exclude-dir=.terraform \
+            --exclude='ci.yml' \
+            '(AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk_live_[A-Za-z0-9]{16,})' . || true)"
+          if [ -n "$secret_hits" ]; then
+            echo "Potential hardcoded secret(s) detected:"
+            echo "$secret_hits"
+            exit 1
+          fi
+          db_hits="$(grep -rnE \
+            --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=target --exclude-dir=.next --exclude-dir=.terraform \
+            --exclude='ci.yml' \
+            'postgres(ql)?://[^[:space:]:@/]+:[^[:space:]@/]+@' . | grep -Ev '@(localhost|127\.0\.0\.1|postgres|db)([:/]|$)|postgres(ql)?://\$\{[^}]+\}:\$\{[^}]+\}@\$\{[^}]+\}' || true)"
+          if [ -n "$db_hits" ]; then
+            echo "Non-local database connection string with credentials detected:"
+            echo "$db_hits"
+            exit 1
+          fi
+
+  backend:
+    name: Backend (Rust + Postgres 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: workshop
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: workshop
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U workshop -d workshop" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgres://workshop:ci-postgres-password@127.0.0.1:5432/workshop
+      DEMO_ACCESS_TOKEN: ci-only-test-demo-token
+      FACILITATOR_TOKEN: ci-only-test-facilitator-token
+      ADMIN_TOKEN: ci-only-test-admin-token
+      DEMO_ENABLED: 'true'
+      BIND_ADDR: 127.0.0.1:3001
+      ALLOWED_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+  frontend:
+    name: Frontend (Next.js + Bundle Secret Scan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('frontend/pnpm-lock.yaml') != '' && 'pnpm' || '' }}
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build production bundle
+        run: pnpm build
+
+      - name: Verify no leaked secrets in .next/static
+        run: |
+          test -d .next/static
+          leaks="$(grep -rnE '(DEMO_ACCESS_TOKEN|FACILITATOR_TOKEN|ADMIN_TOKEN|DATABASE_URL|postgres(ql)?://|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----)' .next/static || true)"
+          if [ -n "$leaks" ]; then
+            echo "Leaked secret or sensitive config in frontend/.next/static:"
+            echo "$leaks"
+            exit 1
+          fi
+
+  terraform:
+    name: Terraform (fmt & validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infra fmt -check -recursive
+
+      - name: Initialize Terraform (backend disabled)
+        run: terraform -chdir=infra init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infra validate

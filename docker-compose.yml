@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-workshop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_LOCAL_DEV_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-workshop}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-workshop} -d ${POSTGRES_DB:-workshop}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: live-workshop-backend:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-workshop}:${POSTGRES_PASSWORD:-CHANGE_ME_LOCAL_DEV_PASSWORD}@postgres:5432/${POSTGRES_DB:-workshop}
+      FACILITATOR_TOKEN: ${FACILITATOR_TOKEN}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      DEMO_ENABLED: ${DEMO_ENABLED:-true}
+      BIND_ADDR: 0.0.0.0:3001
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: live-workshop-frontend:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      BETTER_AUTH_DB_URL: postgres://${POSTGRES_USER:-workshop}:${POSTGRES_PASSWORD:-CHANGE_ME_LOCAL_DEV_PASSWORD}@postgres:5432/${POSTGRES_DB:-workshop}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-CHANGE_ME_BETTER_AUTH_SECRET_MIN_32_CHARS}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+
+volumes:
+  pgdata:

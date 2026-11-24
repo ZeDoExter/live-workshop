@@ -1,0 +1,11 @@
+# Non-secret deployment overrides (copy to terraform.tfvars; never commit terraform.tfvars).
+# Runtime tokens (DEMO_ACCESS_TOKEN, FACILITATOR_TOKEN, ADMIN_TOKEN) are populated
+# out-of-band in AWS Secrets Manager via `aws secretsmanager put-secret-value`.
+
+aws_region          = "us-east-1"
+project_name        = "live-workshop"
+demo_enabled        = true
+acm_certificate_arn = ""
+db_instance_class   = "db.t4g.micro"
+budget_limit_usd    = "10.0"
+enable_eks          = true

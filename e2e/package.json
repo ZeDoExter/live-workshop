@@ -1,0 +1,20 @@
+{
+  "name": "workshop-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:tier1": "playwright test --grep @tier1",
+    "test:tier2": "playwright test --grep @tier2",
+    "test:tier3": "playwright test --grep @tier3",
+    "test:tier4": "playwright test --grep @tier4",
+    "test:compliance": "playwright test --grep @compliance",
+    "typecheck": "tsc --noEmit",
+    "list": "playwright test --list"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

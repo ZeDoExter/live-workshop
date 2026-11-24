@@ -1,0 +1,39 @@
+# Secrets and local environment files
+*.pdf
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.tfvars
+!*.tfvars.example
+
+# Rust (keep Cargo.lock tracked)
+target/
+**/*.rs.bk
+
+# Node / Next.js / Playwright
+node_modules/
+.next/
+out/
+.pnpm-store/
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Agents, OS, and IDEs
+.agents/
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.log
